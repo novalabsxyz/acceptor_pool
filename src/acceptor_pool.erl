@@ -332,7 +332,7 @@ terminate(_, State) ->
     terminate_report(Name, Id, AMod, Restart, Shutdown, Type, Reports).
 
 %% internal
-
+%start => {grpcbox_acceptor, {Transport, ServerOpts, ChatterboxOpts, SslOpts}, []}
 init(Name, Mod, Args, {ok, {#{} = Flags, [#{} = Spec]}}) ->
     case validate_config(Flags, Spec) of
         ok ->
@@ -445,7 +445,7 @@ start_loop(_, 0, Acceptors, _) ->
     Acceptors;
 start_loop(SockRef, N, Acceptors, State) ->
     start_loop(SockRef, N-1, start_acceptor(SockRef, Acceptors, State), State).
-
+%start => {grpcbox_acceptor, {Transport, ServerOpts, ChatterboxOpts, SslOpts}, []}
 start_acceptor(SockRef, Acceptors,
                #state{sockets=Sockets, start={Mod, Args, Opts}}) ->
     case Sockets of
@@ -503,7 +503,7 @@ acceptor_exit(Pid, Reason, #state{acceptors=Acceptors} = State) ->
           when SockRef /= undefined ->
             SockInfo = {undefined, SockName, AcceptRef},
             report(start_error, Pid, Reason, SockInfo, State),
-            restart_acceptor(SockRef, NAcceptors, State);
+            restart_acceptor(Reason, SockRef, NAcceptors, State);
         {{undefined, _, _} = SockInfo, NAcceptors} ->
             % Received 'CANCEL' due to accept timeout or error. If accept error
             % we are waiting for listen socket 'DOWN' to cancel accepting and
@@ -517,7 +517,20 @@ acceptor_exit(Pid, Reason, #state{acceptors=Acceptors} = State) ->
             {noreply, State}
     end.
 
-restart_acceptor(SockRef, Acceptors, State) ->
+%% an acceptor is restarted after an existing one exits
+%% and we always do want to restart one
+%% but if it exits with normal, shutdown or {shutdown, Term}
+%% then it should not count against the defined restart policy
+restart_acceptor(normal = _ExitReason, SockRef, Acceptors, State) ->
+    NAcceptors = start_acceptor(SockRef, Acceptors, State),
+    {noreply, State#state{acceptors=NAcceptors}};
+restart_acceptor(shutdown = _ExitReason, SockRef, Acceptors, State) ->
+    NAcceptors = start_acceptor(SockRef, Acceptors, State),
+    {noreply, State#state{acceptors=NAcceptors}};
+restart_acceptor({shutdown = _} = _ExitReason, SockRef, Acceptors, State) ->
+    NAcceptors = start_acceptor(SockRef, Acceptors, State),
+    {noreply, State#state{acceptors=NAcceptors}};
+restart_acceptor(_ExitReason, SockRef, Acceptors, State) ->
     case add_restart(State) of
         {noreply, NState} ->
             NAcceptors = start_acceptor(SockRef, Acceptors, NState),
